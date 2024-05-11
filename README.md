@@ -1,4 +1,4 @@
-# First assignment in Autonomous Robotics course taken in Ariel Univerity (Semester B 2024)
+# First assignment in Autonomous Robotics course taken in Ariel University (Semester B 2024)
 
 ## How to run
 ```bash
