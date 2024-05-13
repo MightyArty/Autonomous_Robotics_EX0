@@ -163,23 +163,21 @@ class GNSSProcessor:
         sv_position = sv_position.drop(labels='Sat.bias', axis=1)
         sv_position.to_csv(os.path.join('output_logs/', 'output_xyz.csv'))
 
-        def least_squares(xs, measured_pseudorange, x0, b0):
-            dx = 100*np.ones(3)
-            b = b0
+        def least_squares(satellite_positions, measured_pseudorange, initial_estimate, initial_bias):
+            position_update = 100*np.ones(3)
             G = np.ones((measured_pseudorange.size, 4))
-            iterations = 0
-            while np.linalg.norm(dx) > 1e-3:
-                r = np.linalg.norm(xs - x0, axis=1)
-                phat = r + b0
+            while np.linalg.norm(position_update) > 1e-3:
+                r = np.linalg.norm(satellite_positions - initial_estimate, axis=1)
+                phat = r + initial_bias
                 deltaP = measured_pseudorange - phat
-                G[:, 0:3] = -(xs - x0) / r[:, None]
+                G[:, 0:3] = -(satellite_positions - initial_estimate) / r[:, None]
                 sol = np.linalg.inv(np.transpose(G) @ G) @ np.transpose(G) @ deltaP
-                dx = sol[0:3]
+                position_update = sol[0:3]
                 db = sol[3]
-                x0 = x0 + dx
-                b0 = b0 + db
+                satellite_positions = satellite_positions + position_update
+                initial_bias = initial_bias + db
             norm_dp = np.linalg.norm(deltaP)
-            return x0, b0, norm_dp
+            return satellite_positions, initial_bias, norm_dp
 
         b0 = 0
         x0 = np.array([0, 0, 0])
