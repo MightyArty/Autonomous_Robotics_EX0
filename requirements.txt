@@ -1,0 +1,7 @@
+pandas==1.5.3
+numpy
+unlzw3
+xarray
+georinex
+navpy
+simplekml
