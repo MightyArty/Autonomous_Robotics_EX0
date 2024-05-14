@@ -80,6 +80,14 @@ class GNSSProcessor:
         self.measurements['Epoch'] = 0
         self.measurements.loc[self.measurements['UnixTime'] - self.measurements['UnixTime'].shift() > timedelta(milliseconds=200), 'Epoch'] = 1
         self.measurements['Epoch'] = self.measurements['Epoch'].cumsum()
+    
+    @staticmethod
+    def create_kml_file(coords, output_file):
+            kml = simplekml.Kml()
+            for coord in coords:
+                lat, lon, alt = coord
+                kml.newpoint(name="", coords=[(lon, lat, alt)])
+            kml.save(output_file)
 
     def process_gnss_data(self):
         self.read_input_data()
@@ -162,22 +170,56 @@ class GNSSProcessor:
         sv_position["cn0"] = self.measurements["Cn0DbHz"]
         sv_position = sv_position.drop(labels='Sat.bias', axis=1)
         sv_position.to_csv(os.path.join('output_logs/', 'output_xyz.csv'))
+        
 
-        def least_squares(satellite_positions, measured_pseudorange, initial_estimate, initial_bias):
-            position_update = 100*np.ones(3)
-            G = np.ones((measured_pseudorange.size, 4))
+        def least_squares(satellite_positions, measured_pseudoranges, initial_estimate, initial_bias):
+            """
+            Perform least squares estimation to determine the receiver position and clock bias.
+
+            Parameters:
+            satellite_positions (ndarray): Satellite positions (n x 3 array).
+            measured_pseudoranges (ndarray): Measured pseudoranges (n x 1 array).
+            initial_estimate (ndarray): Initial estimate of receiver position (3 x 1 array).
+            initial_bias (float): Initial estimate of clock bias.
+
+            Returns:
+            tuple: Estimated receiver position, clock bias, and norm of pseudorange residuals.
+            """
+            initial_estimate = initial_estimate.astype(float)  # Ensure initial_estimate is of float type
+            initial_bias = float(initial_bias)  # Ensure initial_bias is of float type
+
+            position_update = 100 * np.ones(3)
+            design_matrix = np.ones((measured_pseudoranges.size, 4))
+
             while np.linalg.norm(position_update) > 1e-3:
-                r = np.linalg.norm(satellite_positions - initial_estimate, axis=1)
-                phat = r + initial_bias
-                deltaP = measured_pseudorange - phat
-                G[:, 0:3] = -(satellite_positions - initial_estimate) / r[:, None]
-                sol = np.linalg.inv(np.transpose(G) @ G) @ np.transpose(G) @ deltaP
-                position_update = sol[0:3]
-                db = sol[3]
-                satellite_positions = satellite_positions + position_update
-                initial_bias = initial_bias + db
-            norm_dp = np.linalg.norm(deltaP)
-            return satellite_positions, initial_bias, norm_dp
+                # Compute the geometric distance from receiver to each satellite
+                distances = np.linalg.norm(satellite_positions - initial_estimate, axis=1)
+
+                # Predicted pseudoranges
+                predicted_pseudoranges = distances + initial_bias
+
+                # Residuals between measured and predicted pseudoranges
+                residuals = measured_pseudoranges - predicted_pseudoranges
+
+                # Compute the design matrix (Jacobian)
+                design_matrix[:, 0:3] = -(satellite_positions - initial_estimate) / distances[:, None]
+
+                # Solve the normal equations
+                try:
+                    solution = np.linalg.inv(design_matrix.T @ design_matrix) @ design_matrix.T @ residuals
+                except np.linalg.LinAlgError:
+                    raise ValueError("Singular matrix encountered in least squares solution.")
+
+                # Update the receiver position and clock bias
+                position_update = solution[0:3]
+                bias_update = solution[3]
+                initial_estimate += position_update
+                initial_bias += bias_update
+
+            # Compute the norm of the residuals
+            norm_residuals = np.linalg.norm(residuals)
+
+            return initial_estimate, initial_bias, norm_residuals
 
         b0 = 0
         x0 = np.array([0, 0, 0])
@@ -201,24 +243,17 @@ class GNSSProcessor:
                 x, b, dp = least_squares(xs, pr, x, b)
                 ecef_list.append(x)
 
-        lla = []
-        lla = [navpy.ecef2lla(coord) for coord in ecef_list]
-
-        def create_kml_file(coords, output_file):
-            kml = simplekml.Kml()
-            for coord in coords:
-                lat, lon, alt = coord
-                kml.newpoint(name="", coords=[(lon, lat, alt)])
-            kml.save(output_file)
+        coordinates = []
+        coordinates = [navpy.ecef2lla(coord) for coord in ecef_list]
 
         output_file = os.path.join(self.output_filepath, 'coordinates.kml')
-        create_kml_file(lla, output_file)
+        self.create_kml_file(coordinates, output_file)
 
-        with open('output_logs/lla_coordinates.csv', 'w', newline='') as csvfile:
+        with open('output_logs/coordinates.csv', 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(['Pos.X', 'Pos.Y', 'Pos.Z', 'Lat', 'Lon', 'Alt'])
-            for ecef_coord, lla_coord in zip(ecef_list, lla):
-                writer.writerow([e for e in ecef_coord] + [lla_coord[0], lla_coord[1], lla_coord[2]])
+            for ecef_coord, coord in zip(ecef_list, coordinates):
+                writer.writerow([e for e in ecef_coord] + [coord[0], coord[1], coord[2]])
 
 def main():
     """
